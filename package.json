@@ -1,0 +1,24 @@
+{
+  "name": "distributed-task-queue-management",
+  "version": "1.0.0",
+  "description": "", 
+  "main": "main.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "run": "node src/main.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rohitsinghwho/Task-Queue-Management.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/Rohitsinghwho/Task-Queue-Management/issues"
+  },
+  "homepage": "https://github.com/Rohitsinghwho/Task-Queue-Management#readme"
+}
