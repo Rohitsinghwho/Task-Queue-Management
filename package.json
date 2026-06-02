@@ -8,7 +8,8 @@
   },
   "scripts": {
     "producer": "node src/producer.js",
-    "worker": "node src/worker_start.js"
+    "worker": "node src/worker_start.js",
+    "janitor": "node src/utils/janitor.js"
   },
   "repository": {
     "type": "git",
