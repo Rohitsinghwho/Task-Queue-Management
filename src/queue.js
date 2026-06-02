@@ -19,6 +19,9 @@ export async function Enqueue(taskType, args) {
         id: uuidv4(), // unique identifier for the job
         type: taskType,
         args: args,
+        attempts: 0, // for retry logic
+        maxAttempts: 5, // max retry attempts before giving up
+        lockeduntil: null, // for future use in delayed jobs
         status:'pending',
         createdAt: Date.now().toString(),
      };

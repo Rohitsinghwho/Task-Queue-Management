@@ -1,13 +1,13 @@
-# What was built on phase 2 & 3
+# Phase 3 Enhancements (Reliable Queue + Visibility Timeout)
 
 ## The Goal of Phase 3
-To move away from destructive popping mechanisms (`BRPOP`) which cause permanent data loss on application crashes, and implement a resilient, two-list architecture (Reliable Queue Pattern) where tasks are tracked securely until successfully completed.
+Move away from destructive popping (`BRPOP`) that can lose jobs on crashes, and implement a resilient, two-list architecture (Reliable Queue Pattern) where tasks are tracked until they are successfully completed.
 
 ---
 
 ## What We Built in Phase 3
 
-We introduced a secondary tracking layer known as a **Processing Queue** (`jobs:processing`) alongside the Main Queue (`jobs`). 
+We introduced a secondary tracking layer known as a **Processing Queue** (`jobs:processing`) alongside the Main Queue (`jobs`).
 
 Instead of removing an item from the database instantly upon pickup, the worker shifts the item into this temporary "In-Flight" buffer. If the worker crashes mid-execution, the item stays safe inside the database.
 
@@ -75,7 +75,36 @@ Because a basic Janitor uses `lMove` to indiscriminately sweep the processing qu
 
 ---
 
-## The Solution: What Will Be Done Next?
+## The Solution: Visibility Timeout (Leasing) + Locks
 
-To resolve the race condition and reach production-grade architectural stability, we will implement a **Visibility Timeout (Leasing) Strategy**.
+To resolve the race condition and reach production-grade stability, we added a **Visibility Timeout (Leasing) Strategy** with per-job locks.
 
+### What Was Added
+1. **Lease Locking on Pickup:** When a worker grabs a job via `blMove`, it immediately sets a lock key with a short TTL: `lock:<jobId>`.
+2. **Janitor-Aware Recovery:** The janitor now checks the lock before re-queueing. If the lock exists, the job is still in progress and is skipped. If the lock is missing or expired, the job is re-queued.
+3. **Lock Cleanup on Completion/Failure:** On success or failure, the worker removes the lock and either acknowledges the job or retries it.
+4. **Retry with Exponential Backoff:** Failed jobs are re-queued with exponential backoff and jitter until `maxAttempts` is reached.
+
+### Example Output After Adding Visibility Timeout and Locks
+
+```
+Janitor started — checking every 10 seconds
+Janitor connected to Redis. Cleaning up processing queue: jobs:processing
+Job c16bd09a-c625-413c-ab42-c08cae1f79f2 is currently locked. Skipping.
+Job 171df8cf-bdb6-429e-b609-2b81d0e854a3 lock expired — requeueing
+Janitor connected to Redis. Cleaning up processing queue: jobs:processing
+Job c16bd09a-c625-413c-ab42-c08cae1f79f2 is currently locked. Skipping.
+Janitor connected to Redis. Cleaning up processing queue: jobs:processing
+Job c16bd09a-c625-413c-ab42-c08cae1f79f2 is currently locked. Skipping.
+Janitor connected to Redis. Cleaning up processing queue: jobs:processing
+Job c16bd09a-c625-413c-ab42-c08cae1f79f2 is currently locked. Skipping.
+Janitor connected to Redis. Cleaning up processing queue: jobs:processing
+Job c16bd09a-c625-413c-ab42-c08cae1f79f2 lock expired — requeueing
+Janitor connected to Redis. Cleaning up processing queue: jobs:processing
+Processing queue jobs:processing is already empty. No cleanup needed.
+```
+
+## Implementation Notes (Current Behavior)
+1. **Lock Key Format:** `lock:<jobId>` with a TTL equal to `VISIBILITY_TIMEOUT` (seconds).
+2. **Janitor Interval:** Runs every 10 seconds; scans `jobs:processing` and re-queues only when the lock is missing.
+3. **Failure Path:** `NACK` removes the job from processing, clears the lock, increments attempts, and retries with exponential backoff until `maxAttempts` is reached.
