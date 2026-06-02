@@ -1,13 +1,14 @@
 {
   "name": "distributed-task-queue-management",
   "version": "1.0.0",
-  "description": "", 
+  "description": "",
   "main": "main.js",
   "directories": {
     "doc": "docs"
   },
   "scripts": {
-    "run": "node src/main.js"
+    "producer": "node src/producer.js",
+    "worker": "node src/worker_start.js"
   },
   "repository": {
     "type": "git",
@@ -20,5 +21,10 @@
   "bugs": {
     "url": "https://github.com/Rohitsinghwho/Task-Queue-Management/issues"
   },
-  "homepage": "https://github.com/Rohitsinghwho/Task-Queue-Management#readme"
+  "homepage": "https://github.com/Rohitsinghwho/Task-Queue-Management#readme",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "redis": "^6.0.0",
+    "uuid": "^14.0.0"
+  }
 }
