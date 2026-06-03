@@ -7,10 +7,12 @@
     "doc": "docs"
   },
   "scripts": {
-    "producer": "node src/producer.js",
-    "worker": "node src/worker_start.js",
-    "janitor": "node src/utils/janitor.js"
-  },
+  "producer": "node --loader ts-node/esm src/producer.ts",
+  "worker":   "node --loader ts-node/esm src/worker_start.ts",
+  "janitor":  "node --loader ts-node/esm src/janitor_start.ts",
+  "build":    "tsc",
+  "start":    "node dist/worker_start.js"
+},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Rohitsinghwho/Task-Queue-Management.git"
@@ -27,5 +29,13 @@
     "dotenv": "^17.4.2",
     "redis": "^6.0.0",
     "uuid": "^14.0.0"
+  },
+  "devDependencies": {
+    "@types/dotenv": "^6.1.1",
+    "@types/node": "^25.9.1",
+    "@types/redis": "^4.0.10",
+    "@types/uuid": "^10.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
   }
 }
