@@ -1,8 +1,15 @@
+/**
+ * Queue client for enqueueing and inspecting jobs.
+ *
+ * Stores job payloads in Redis hashes and manages queue lists.
+ */
 import {generateRandomId} from '../utils/randomId.js';
 import {createQueueClient,RedisClient} from '../redisClient/client.js';
 import {buildKeys,QueueKeys,jobKey} from '../utils/keys.js';
 import {jobStatus} from '../types/job.js'
 import {Job, JobOptions} from '../interfaces/jobOptions.js';
+import { eventBus } from './eventBus.js';
+import { QueueEvents } from '../interfaces/QueueEvents.js';
 
 
 export class Queue {
@@ -16,8 +23,8 @@ export class Queue {
         this.keys = buildKeys(name)
     }
 
-    // static method to create a queue instance with a new Redis client
-    // cause constructor is private and it cannot be async, we need to use a static method to create an instance of the queue
+    // Static method to create a queue instance with a new Redis client.
+    // The constructor cannot be async, so we use a factory.
     static async create(name:string):Promise<Queue>{
         const client = await createQueueClient()
         const queue = new Queue(name,client)
@@ -26,7 +33,7 @@ export class Queue {
         return queue
     }
 
-    // add main method which we call the producer
+    // Main enqueue method used by producers.
     async add<T =Record<string,unknown>>(
     type:string,
     args:T,
@@ -49,11 +56,10 @@ export class Queue {
             createdAt: new Date().toString()
         }
 
-        // Two redis operations : 
-            // 1. store job data in a hash -> so worker can get the job data later by id
-            // 2. push job id to wait list -> so worker can pick it up later
-
-        // not atomic yet this is where lua will go later on
+        // Two Redis operations:
+        // 1) store job data in a hash so the worker can fetch by id
+        // 2) push job id to the wait list so a worker can pick it up
+        // Not atomic yet; a Lua script can wrap this later.
         await this.client.hSet(
             jobKey(this.name,job.id),
             this.serializeJob(job)
@@ -61,12 +67,13 @@ export class Queue {
 
         await this.client.lPush(this.keys.wait, job.id);
 
+        eventBus.emit('queue',{type:'job.added', job} as QueueEvents)
         console.log(`[Queue:${this.name}] added job ${job.id} type=${type}`)
         return job
     }
 
 
-    // get job -> look for any job by id
+    // Look up a job by id.
 
     async getJob<T = Record<string,unknown>>(id:string):Promise<Job<T> | null>{
         const data = await this.client.hGetAll(jobKey(this.name,id))
@@ -77,12 +84,12 @@ export class Queue {
     }
 
 
-    // get length - how many jobs are waiting in the queue
+    // How many jobs are waiting in the queue.
     async getWaitingCount():Promise<number>{
         return await this.client.lLen(this.keys.wait)
     }
 
-    // get status of the queue - how many jobs are in each state
+    // Get status of the queue: counts per list.
     async getStatus():Promise<Record<jobStatus | 'waiting',number>>{
         const [waiting,active,completed,failed]= await Promise.all([
             this.client.lLen(this.keys.wait),
@@ -94,7 +101,7 @@ export class Queue {
     }
 
 
-    // close call - clean shutdown of the queue and redis client
+    // Clean shutdown of the queue and Redis client.
     async close():Promise<void>{
         await this.client.quit()
         this.connected = false
@@ -102,12 +109,12 @@ export class Queue {
     }
 
 
-    // queue length
+    // Alias for wait list length.
     async getLength():Promise<number>{
         return await this.client.lLen(this.keys.wait)
     }
 
-    // private helper methods to serialize and deserialize job data for storage in Redis
+    // Serialize/deserialize job data for storage in Redis hashes.
     private serializeJob<T>(job:Job<T>):Record<string,string>{
         return {
             id: job.id,

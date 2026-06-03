@@ -1,3 +1,8 @@
+/**
+ * Janitor process entry point.
+ *
+ * Starts the janitor loop for a queue and keeps the process alive until SIGINT.
+ */
 import { Janitor } from './classes/janitor.js'
 
 async function main() {
@@ -12,7 +17,7 @@ async function main() {
 
   janitor.start()
 
-  // keep process alive — janitor.start() is non blocking
+  // Keep process alive — janitor.start() is non-blocking and the loop lives on timers.
   await new Promise(() => {})
 }
 

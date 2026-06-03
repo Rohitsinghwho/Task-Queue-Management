@@ -1,80 +1,41 @@
-# Distributed Task Queue Management
+# Documentation Index
 
-A production-grade distributed task queue built to learn how systems like Celery, BullMQ, and SQS work under the hood. This project evolves across phases to add persistence, reliability, and resiliency.
+This repository contains multiple docs that track phases, architecture, and operational characteristics. Use this as a quick index.
 
-## Architecture
-
-```mermaid
-graph TD
-  P[Producer] --> Q[Redis Queue (jobs)]
-  Q --> W[Worker]
-  W -->|ACK| DONE[Completed]
-  W -->|NACK/Retry| Q
-  W -->|In-flight| PQ[Processing Queue (jobs:processing)]
-  J[Janitor] -->|Requeue if lock expired| Q
-  W -->|Lock TTL| L[lock:<jobId>]
-```
-
-## Phases (Short Summary)
-
-- **Phase 1: In-Memory Queue**
-  - FIFO queue in memory with polling vs blocking.
-  - Task registry + serialization/deserialization.
-- **Phase 2: Redis-Backed Queue**
-  - Persistent Redis List with `LPUSH` + `BRPOP`.
-  - Producer/Worker split for decoupled scaling.
-- **Phase 3: Reliable Queue + Visibility Timeout**
-  - Atomic `BLMOVE` from `jobs` to `jobs:processing`.
-  - Manual ACK (`LREM`) and per-job locks with TTL.
-  - Janitor re-queues only when locks expire.
-  - Retry with exponential backoff and jitter.
-
-Detailed docs:
+## Core Docs
+- docs/Project_Overview.md
+- docs/Project_Status.md
 - docs/Phase_one.md
 - docs/Phase_two.md
 - docs/Phase_three.md
-- docs/Project_Overview.md
+- docs/refactor.md
 
-## Setup Guide
+## Operational Reference
+- docs/Redis_Reference.md
+- docs/Concurrency_Reliability_Durability.md
+- docs/Data_Model.md
+- docs/Configuration.md
+- docs/Failure_Modes.md
+- docs/Runbook.md
+- docs/Performance_Tuning.md
+- docs/Security.md
+- docs/Testing_Strategy.md
+- docs/Roadmap.md
 
-### Prerequisites
-- Node.js 18+ (or any modern Node.js LTS)
-- Redis (local or hosted)
-
-### Install
-
-```bash
-npm install
-```
-
-### Configure Environment
-
-Create a `.env` file in the project root:
-
-```
-REDIS_URL=redis://localhost:6379
-```
-
-If you use a hosted Redis provider, set the connection string accordingly.
-
-### Run
-
-Open separate terminals:
-
-```bash
-npm run worker
-```
-
-```bash
-npm run janitor
-```
-
-```bash
-npm run producer
-```
-
-## Notes
-
-- `worker` processes jobs from the main queue and tracks in-flight items in `jobs:processing`.
-- `janitor` re-queues jobs only when their lock has expired.
-- Failed jobs retry with exponential backoff until `maxAttempts` is reached.
+## Suggested Reading Order
+1. docs/Project_Overview.md
+2. docs/Phase_one.md
+3. docs/Phase_two.md
+4. docs/Phase_three.md
+5. docs/Project_Status.md
+6. docs/Redis_Reference.md
+7. docs/Concurrency_Reliability_Durability.md
+8. docs/Data_Model.md
+9. docs/Configuration.md
+10. docs/Failure_Modes.md
+11. docs/Runbook.md
+12. docs/Performance_Tuning.md
+13. docs/Security.md
+14. docs/Testing_Strategy.md
+15. docs/Roadmap.md
+16. docs/refactor.md

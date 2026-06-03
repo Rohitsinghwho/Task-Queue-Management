@@ -7,12 +7,13 @@
     "doc": "docs"
   },
   "scripts": {
-  "producer": "node --loader ts-node/esm src/producer.ts",
-  "worker":   "node --loader ts-node/esm src/worker_start.ts",
-  "janitor":  "node --loader ts-node/esm src/janitor_start.ts",
-  "build":    "tsc",
-  "start":    "node dist/worker_start.js"
-},
+    "producer": "node --loader ts-node/esm src/producer.ts",
+    "worker": "node --loader ts-node/esm src/worker_start.ts",
+    "janitor": "node --loader ts-node/esm src/janitor_start.ts",
+    "build": "tsc",
+    "start": "node dist/worker_start.js",
+    "server":   "node --loader ts-node/esm src/server_start.ts"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Rohitsinghwho/Task-Queue-Management.git"
@@ -26,12 +27,16 @@
   },
   "homepage": "https://github.com/Rohitsinghwho/Task-Queue-Management#readme",
   "dependencies": {
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "redis": "^6.0.0",
     "uuid": "^14.0.0"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
     "@types/dotenv": "^6.1.1",
+    "@types/express": "^5.0.6",
     "@types/node": "^25.9.1",
     "@types/redis": "^4.0.10",
     "@types/uuid": "^10.0.0",

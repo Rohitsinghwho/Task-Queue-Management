@@ -1,4 +1,6 @@
-// Single Source of Truth for Redis key in the entire application
+/**
+ * Single source of truth for Redis keys used by the system.
+ */
 
 export interface QueueKeys{
     wait:string
@@ -22,7 +24,7 @@ export function buildKeys(queueName:string):QueueKeys{
 
 
 
-// for per job keys because each job will have a unique key for preventing collision between jobs
+// Per-job keys to prevent collisions between jobs.
 
 export function jobKey(queueName:string, jobId:string):string{
     return `bq:${queueName}:job:${jobId}`

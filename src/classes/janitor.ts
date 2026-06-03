@@ -1,8 +1,15 @@
-// janitor.js - This module defines the Janitor class, responsible for cleaning up expired tasks from the Redis database.
+/**
+ * Janitor class responsible for recovering stuck jobs.
+ *
+ * It scans the active list for jobs whose locks have expired and either retries
+ * them or moves them to failed based on attempts.
+ */
 
 import { createJanitorClient, RedisClient } from "../redisClient/client.js";
 import { buildKeys, QueueKeys, jobKey, lockkey } from "../utils/keys.js";
 import { JanitorOptions } from "../interfaces/janitorOptions.js";
+import { QueueEvents } from "../interfaces/QueueEvents.js";
+import { eventBus } from "./eventBus.js";
 
 export class Janitor {
   private client: RedisClient;
@@ -26,7 +33,7 @@ export class Janitor {
     };
   }
 
-  // static method to create a janitor instance with a new Redis client
+  // Static factory method because constructor cannot be async.
   static async create(
     queueName: string,
     options: JanitorOptions = {},
@@ -40,7 +47,7 @@ export class Janitor {
     return janitor;
   }
 
-  // start() - method to start the janitor process, which will run at regular intervals to clean up expired tasks
+  // Start the janitor loop that periodically scans for stuck jobs.
   start(): void {
     if (!this.isConnected) {
       throw new Error("Janitor is not connected to Redis");
@@ -58,7 +65,7 @@ export class Janitor {
     this.intervalId = setInterval(() => this.scan(), this.options.pollInterval);
   }
 
-  //   stop() - method to stop the janitor process
+  // Stop the janitor loop and close the Redis client.
   async stop(): Promise<void> {
     this.running = false;
     if (this.intervalId) {
@@ -71,13 +78,12 @@ export class Janitor {
     );
   }
 
-  // scan() -main logic runs on every interval
+  // Main logic that runs on every interval.
   private async scan(): Promise<void> {
     console.log(`[Janitor:${this.name}] scanning active queue...`);
     try {
-      // get all the job ids from the active queue
-      // this are the jobs which are picked up by the worker
-      // but not completed yet, so we need to check if they are expired or not
+      // Get job IDs currently in the active list (picked by workers, not completed).
+      // Each is checked for an expired lock to detect stuck processing.
       const activeJobIds = await this.client.lRange(this.keys.active, 0, -1);
       if (activeJobIds.length === 0) {
         console.log(`[Janitor:${this.name}] no active jobs found`);
@@ -94,19 +100,18 @@ export class Janitor {
     }
   }
 
-  // checkJob() - check if a job is expired or not, if expired move it back to the wait queue for retry
+  // Check if a job is expired; if so, recover it back to wait for retry.
   private async checkJob(jobId: string): Promise<void> {
     const lock = await this.client.get(lockkey(this.name, jobId));
 
     if (lock) {
-      // lock exixts , workers are still processing the job, so skip it
-      // lock has a ttl so it will expire naturally
+      // Lock exists: workers are still processing, so skip it.
+      // Lock has a TTL and will expire naturally.
       console.log(`[Janitor:${this.name}] job ${jobId} is locked, skipping...`);
       return;
     }
 
-    // lock is gone but job is still in active queue
-    // this means the worker has died or got stuck while processing the job
+    // Lock is gone but job is still in active queue: worker likely died or hung.
 
     console.log(
       `[Janitor:${this.name}] job ${jobId} lock expired,recovering...`,
@@ -114,25 +119,26 @@ export class Janitor {
     await this.recover(jobId);
   }
 
-  // recover() - move the stuck job back to the wait queue for retry
+  // Move a stuck job back to the wait queue for retry.
 
   private async recover(jobId: string): Promise<void> {
     // fetch the job
     const data = await this.client.hGetAll(jobKey(this.name, jobId));
     if (!data || Object.keys(data).length === 0) {
-      // job data is missing, this should not happen but we can just skip it
+      // Job data is missing; remove the dangling ID from active to avoid leaks.
       console.warn(
         `[Janitor:${this.name}] job ${jobId} data is missing, skipping recovery...`,
       );
-      // remove the job from active queue
+      // Remove the job from active queue.
       await this.client.lRem(this.keys.active, 0, jobId);
+      eventBus.emit('queue',{type:'queue.recovered', jobId} as QueueEvents)
       return;
     }
 
     const attempts = parseInt(data.attempts ?? "0");
     const maxAttempts = parseInt(data.maxAttempts ?? "5");
 
-    // check if the job has exceeded max attempts
+    // Check if the job has exceeded max attempts.
     if (attempts >= maxAttempts) {
       console.warn(
         `[Janitor:${this.name}] job ${jobId} has exceeded max attempts, moving to failed queue...`,
@@ -146,19 +152,18 @@ export class Janitor {
       status: "retrying",
     });
 
-    //  not atomic yet — recoverJob.lua will fix this in Phase 2
-    // for now: LMOVE is at least atomic for the list operation
-    // if crash happens between lMove and hSet — job is back in wait
-    // which is safe (better than losing it)
+    // Not fully atomic yet — recoverJob.lua will fix this in Phase 2.
+    // For now: LMOVE is atomic for list movement. If a crash happens between
+    // lMove and hSet, the job is back in wait, which is safer than losing it.
     await this.client.lMove(this.keys.active, this.keys.wait, "LEFT", "RIGHT");
     console.log(
       `[Janitor:${this.name}] job ${jobId} moved back to wait queue for retry (attempt ${attempts + 1}/${maxAttempts})`,
     );
   }
 
-//   moveToFailed() - move the job to failed queue when it has exceeded max attempts
+// Move job to failed queue when it has exceeded max attempts.
     private async moveToFailed(jobId: string, reason: string): Promise<void> {
-        // NOT ATOMIC YET
+    // Not atomic yet — failure flow will be wrapped in Lua in a later phase.
         await this.client.lRem(this.keys.active, 0, jobId);
         await this.client.lPush(this.keys.failed, jobId);
         await this.client.hSet(jobKey(this.name, jobId), {

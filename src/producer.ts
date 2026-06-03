@@ -1,3 +1,8 @@
+/**
+ * Producer example entry point.
+ *
+ * Enqueues a few sample jobs and prints queue length.
+ */
 import { Queue } from './classes/queue.js'
 
 async function main() {

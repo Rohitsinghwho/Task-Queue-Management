@@ -1,3 +1,8 @@
+/**
+ * Redis client factories for queue, worker, and janitor roles.
+ *
+ * Each role gets its own connection for isolation and clearer logs.
+ */
 import { createClient } from 'redis';
 import dotenv from 'dotenv';
 

@@ -1,3 +1,8 @@
+/**
+ * Worker process entry point.
+ *
+ * Starts worker loops and handles graceful shutdown.
+ */
 import { Worker } from './classes/worker.js'
 
 async function main() {

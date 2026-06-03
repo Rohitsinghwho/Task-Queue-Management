@@ -1,11 +1,16 @@
-// 1. Connect to Redis (separate client from Queue)
-// 2. Poll for jobs (BLMOVE — blocking)
-// 3. Handle concurrency (N jobs at once)
-// 4. Execute the job (call task handler)
-// 5. On success → update job hash + move to completed
-// 6. On failure → NACK (retry with backoff or move to DLQ)
-// 7. Janitor hook → update lock on each job
-// 8. Clean shutdown (finish in-flight jobs before stopping)
+/**
+ * Worker implementation for processing queue jobs.
+ *
+ * Lifecycle overview:
+ * 1) Connect to Redis (separate client from Queue)
+ * 2) Poll for jobs (BLMOVE — blocking)
+ * 3) Handle concurrency (N jobs at once)
+ * 4) Execute the job (call task handler)
+ * 5) On success → update job hash + move to completed
+ * 6) On failure → NACK (retry with backoff or move to DLQ)
+ * 7) Janitor hook → lock each job while in-flight
+ * 8) Clean shutdown (finish in-flight jobs before stopping)
+ */
 
 import { createWorkerClient, RedisClient } from "../redisClient/client.js";
 import { calculateBackoff } from "../utils/backoff.js";
@@ -14,6 +19,9 @@ import { Job, JobOptions } from "../interfaces/jobOptions.js";
 import { jobStatus } from "../types/job.js";
 import { taskRegistry } from "../task.js";
 import { WorkerOptions } from "../interfaces/workerOptions.js";
+import { eventBus } from "./eventBus.js";
+import { QueueEvents } from "../interfaces/QueueEvents.js";
+
 
 export class Worker {
   private client: RedisClient;
@@ -21,7 +29,7 @@ export class Worker {
   private keys: QueueKeys;
   private isConnected: boolean = false;
   private running: boolean = false;
-  private activeJobs: Set<string> = new Set(); //track active job ids
+  private activeJobs: Set<string> = new Set(); // Track in-flight job ids.
   private options: Required<WorkerOptions>;
 
   constructor(
@@ -51,8 +59,7 @@ export class Worker {
     return worker;
   }
 
-  // start point for worker to start processing jobs
-  // spawns N concurrent loops to poll for jobs
+  // Start point for worker to process jobs; spawns N concurrent loops.
   async start(): Promise<void> {
     this.running = true;
     console.log(
@@ -60,15 +67,14 @@ export class Worker {
         `concurrency=${this.options.concurrency}`,
     );
 
-    // spawn N concurrent loops to poll for jobs
+    // Spawn N concurrent loops to poll for jobs.
     const loops = Array.from({ length: this.options.concurrency }, (_i) =>
       this.runLoop(),
     );
     await Promise.all(loops);
   }
 
-  //   graceful shutdown:
-  // stops accepting new jobs, waits for in-flight jobs to finish
+  // Graceful shutdown: stop accepting new jobs and wait for in-flight jobs.
 
   async stop(): Promise<void> {
     console.log(`[Worker:${this.queueName}] stopping gracefully...`);
@@ -81,20 +87,19 @@ export class Worker {
       );
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
-
     await this.client.quit();
     console.log(
       `[Worker:${this.queueName}] stopped and disconnected from Redis`,
     );
   }
 
-  //   run loop is the main worker loop that polls for jobs and processes them
+  // Main worker loop that polls for jobs and processes them.
 
   private async runLoop(): Promise<void> {
     while (this.running) {
       try {
-        // BLMOVE automically moves job Id from wait to active and returns the job id
-        // blocks for pollTimeout seconds if no job is available
+        // BLMOVE atomically moves job ID from wait to active and returns it.
+        // Blocks for pollTimeout seconds if no job is available.
 
         const jobId = await this.client.blMove(
           this.keys.wait,
@@ -109,10 +114,10 @@ export class Worker {
           continue;
         }
 
-        // set lock so that janitor can detect that this job is being processed and not stuck
+        // Set lock so janitor can detect that this job is being processed.
         await this.setLock(jobId);
 
-        // track this job as in flight
+        // Track this job as in-flight.
         this.activeJobs.add(jobId);
 
         // process and handle result
@@ -126,13 +131,12 @@ export class Worker {
     }
   }
 
-  //   processJob() - fetch the job data, execute the task handler, and update job status based on result
+  // Fetch job data, execute the task handler, and update status based on result.
   private async processJob(jobId: string): Promise<void> {
     // fetch job from hash
     const job = await this.getJob(jobId);
     if (!job) {
-      // jobId was in list but no corresponding hash data - this shouldn't happen but we can just skip it
-      // corrupted State - remove from active and move on
+      // Job ID was in list but no hash data; remove from active and move on.
       console.error(
         `[Worker:${this.queueName}] job ${jobId} not found in hash, discarding...`,
       );
@@ -140,20 +144,21 @@ export class Worker {
       return;
     }
 
-    // update status to Active in hash
+    // Update status to active in hash.
     await this.updateJobStatus(jobId, "active");
     console.log(
       `[Worker:${this.queueName}] ` +
         `processing job ${jobId} type=${job.type} ` +
         `attempt=${job.attempts + 1}/${job.maxAttempts}`,
     );
-
+    eventBus.emit("queue", { type: "job.active", job });
     // find the handler
     const handler = taskRegistry[job.type];
     if (!handler) {
       console.error(
         `[Worker:${this.queueName}] no handler found for job type ${job.type}, moving to failed...`,
       );
+      eventBus.emit("queue", { type: "job.failed", job, reason: `No handler found for job type: ${job.type}` });
       await this.moveToFailed(
         job,
         `No handler found for job type: ${job.type}`,
@@ -172,22 +177,23 @@ export class Worker {
     }
   }
 
-  //   moveToCompleted()
+  // Move job to completed list and update status.
   private async moveToCompleted(job: Job): Promise<void> {
-    // not atomic yet - moveToCompleted lua will fix it later
+    // Not atomic yet — moveToCompleted Lua will fix it later.
     await this.client.lRem(this.keys.active, 1, job.id);
     await this.client.lPush(this.keys.completed, job.id);
     await this.updateJobStatus(job.id, "completed");
     await this.releaseLock(job.id);
 
+    eventBus.emit("queue", { type: "job.completed", job });
     console.log(
       `[Worker:${this.queueName}] job ${job.id} completed successfully`,
     );
   }
 
-  //   moveToFailed()
+  // Move job to failed list and update status.
   private async moveToFailed(job: Job, reason: string): Promise<void> {
-    // not atomic yet - moveToFailed lua will fix it later
+    // Not atomic yet — moveToFailed Lua will fix it later.
     await this.client.lRem(this.keys.active, 1, job.id);
     await this.client.lPush(this.keys.failed, job.id);
     await this.client.hSet(
@@ -196,9 +202,10 @@ export class Worker {
       reason,
     );
     await this.releaseLock(job.id);
+    eventBus.emit("queue", { type: "job.failed", job, reason });
     console.log(`[Worker:${this.queueName}] job ${job.id} failed: ${reason}`);
   }
-  // NACK() - retry with backoff or move to DLQ
+  // Retry with backoff or move to failed if attempts exceeded.
 
   private async NACK(job: Job, reason: string): Promise<void> {
     await this.client.lRem(this.keys.active, 1, job.id);
@@ -223,15 +230,16 @@ export class Worker {
       `[Worker:${this.queueName}] retrying job ${job.id} in ${Math.round(delay / 1000)}s... (reason: ${reason})`,
     );
 
-    // push back to wait queue after delay
+    eventBus.emit("queue", { type: "job.retrying", job, reason });
+    // Push back to wait queue after delay.
     setTimeout(async () => {
       await this.client.lPush(this.keys.wait, job.id);
     }, delay);
   }
 
-  //   lock helpers
+  // Lock helpers.
 
-//   set lock when job is being processed, so that janitor can detect stuck jobs by looking for locks that have expired (older than visibility timeout)
+  // Set lock while job is being processed so janitor can detect stuck jobs.
   private async setLock(jobId: string): Promise<void> {
     await this.client.set(
       lockkey(this.queueName, jobId),
@@ -240,15 +248,17 @@ export class Worker {
         EX: this.options.visibilityTimeout,
       },
     );
+    eventBus.emit("queue", { type: "job.locked", job: { id: jobId } } as QueueEvents);
   }
 
-//   release lock after job is done (either completed or failed)
+  // Release lock after job is done (either completed or failed).
     private async releaseLock(jobId: string): Promise<void> {
         await this.client.del(lockkey(this.queueName, jobId))
+        eventBus.emit("queue", { type: "job.unlocked", job: { id: jobId } } as QueueEvents);
     }
 
 
-    // redis hash helpers to serialize/deserialize job data
+    // Redis hash helpers to serialize/deserialize job data.
 
     private async getJob(jobId:string):Promise<Job | null>{
         const data=await this.client.hGetAll(jobKey(this.queueName,jobId))
@@ -269,7 +279,7 @@ export class Worker {
         }
     }
 
-    // update job status 
+    // Update job status in Redis hash.
     private async updateJobStatus(jobId:string, status:jobStatus):Promise<void>{
         await this.client.hSet(jobKey(this.queueName, jobId), { status })
     }
